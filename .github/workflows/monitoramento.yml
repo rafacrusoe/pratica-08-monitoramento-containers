@@ -1,0 +1,98 @@
+name: Prática 08 - Monitoramento de contêineres
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  monitoramento:
+    name: Grafana, Prometheus, cAdvisor e cargas
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Baixar o repositório
+        uses: actions/checkout@v4
+
+      - name: Registrar versões
+        run: |
+          mkdir -p evidencias
+          {
+            echo "Runner: ubuntu-24.04"
+            docker --version
+            docker compose version
+          } | tee evidencias/00-versoes.txt
+
+      - name: Validar a configuração da stack
+        run: docker compose config | tee evidencias/00-compose-config.txt
+
+      - name: Baixar as imagens
+        run: docker compose --profile carga pull
+
+      - name: Iniciar monitoramento e executar as três coletas
+        run: ./scripts/run-local.sh
+
+      - name: Registrar análise objetiva
+        run: |
+          python3 - <<'PY' | tee evidencias/06-analise.txt
+          import json
+          from pathlib import Path
+
+          def valores(etapa, recurso):
+              dados = json.loads(Path(f"evidencias/{etapa}/resumo.json").read_text())
+              saida = []
+              for item in dados[recurso]:
+                  nome = item.get("metric", {}).get("name", "sem-nome")
+                  try:
+                      valor = float(item["value"][1])
+                  except (KeyError, ValueError, TypeError):
+                      continue
+                  saida.append((valor, nome))
+              return sorted(saida, reverse=True)
+
+          unidades = {"cpu": "%", "memoria": "MiB", "io": "B/s", "rede": "B/s"}
+          print("ANÁLISE DAS MÉTRICAS SOB CARGA")
+          for recurso in ("cpu", "memoria", "io", "rede"):
+              itens = valores("sob-carga", recurso)
+              if itens:
+                  valor, nome = itens[0]
+                  print(f"{recurso.upper()}: maior valor = {nome}, {valor:.2f} {unidades[recurso]}")
+              else:
+                  print(f"{recurso.upper()}: sem série disponível no instante da consulta")
+          print("\nInterpretação esperada por carga:")
+          print("teste-cpu: maior pressão de CPU.")
+          print("teste-memoria: maior consumo de memória.")
+          print("teste-io: maior taxa de gravação em disco.")
+          print("teste-rede: maior tráfego de rede.")
+          PY
+
+      - name: Conferir as evidências
+        run: |
+          test -s evidencias/01-dashboard-linha-base.png
+          test -s evidencias/02-dashboard-sob-carga.png
+          test -s evidencias/03-dashboard-comportamento.png
+          file evidencias/*.png
+          find evidencias -maxdepth 2 -type f -printf '%p %s bytes\n' | sort
+
+      - name: Publicar evidências da prática
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidencias-pratica-08
+          path: evidencias/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Exibir diagnóstico em caso de falha
+        if: failure()
+        run: |
+          docker compose ps -a
+          docker compose logs --no-color --tail=150
+
+      - name: Encerrar a stack
+        if: always()
+        run: docker compose --profile carga down -v --remove-orphans
