@@ -28,13 +28,17 @@ jobs:
           } | tee evidencias/00-versoes.txt
 
       - name: Validar a configuração da stack
-        run: docker compose config | tee evidencias/00-compose-config.txt
+        run: |
+          chmod +x scripts/*.sh
+          docker compose config | tee evidencias/00-compose-config.txt
 
       - name: Baixar as imagens
         run: docker compose --profile carga pull
 
       - name: Iniciar monitoramento e executar as três coletas
-        run: ./scripts/run-local.sh
+        run: |
+          chmod +x scripts/*.sh
+          bash scripts/run-local.sh
 
       - name: Registrar análise objetiva
         run: |
